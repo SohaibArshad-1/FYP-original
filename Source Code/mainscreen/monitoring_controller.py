@@ -200,7 +200,15 @@ class MonitoringThread(QThread):
         self._real.join()
 
     def stop(self):
-        if self._loopback:
-            self._loopback.stop()
-        if self._real:
-            self._real.stop()
+        try:
+            if self._loopback:
+                self._loopback.stop()
+                self._loopback.join(timeout=2)
+        except Exception as e:
+            print(f"[STOP LOOPBACK] {e}")
+        try:
+            if self._real:
+                self._real.stop()
+                self._real.join(timeout=2)
+        except Exception as e:
+            print(f"[STOP REAL] {e}")

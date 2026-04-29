@@ -1,9 +1,18 @@
+import os
+os.environ['SKLEARN_SILENCE_MLJ_UNPICKLING_WARNING'] = '1'
+
 import time
 import threading
 import socket
 from socket import SO_REUSEADDR
 import json
+import warnings
+warnings.filterwarnings('ignore')
+
 import joblib
+from joblib import parallel_backend
+joblib.parallel_backend('threading', n_jobs=2)
+
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -41,9 +50,9 @@ def _load_ml_model():
         return True
     try:
         print("[ML] Loading Random Forest model...")
-        ML_MODEL = joblib.load(MODEL_PATH)
-        ML_COLS  = joblib.load(COLS_PATH)
-        ML_LE    = joblib.load(LE_PATH)
+        ML_MODEL = joblib.load(MODEL_PATH, verbose=0)
+        ML_COLS  = joblib.load(COLS_PATH, verbose=0)
+        ML_LE    = joblib.load(LE_PATH, verbose=0)
         print(f"[ML] Model loaded. Classes: {list(ML_LE.classes_)}")
         ML_LOADED = True
         return True
@@ -86,10 +95,17 @@ ALERT_COOLDOWN = 60
 ML_CONFIDENCE_THRESHOLD = 0.60
 
 ALERT_COUNTS = {
-    "DoS":    15,
-    "Probe":  15,
-    "R2L":    8,
-    "U2R":    5,
+    "DoS":    5,
+    "Probe":  5,
+    "R2L":    3,
+    "U2R":    2,
+}
+
+DEMO_TRIGGER_THRESHOLD = {
+    "DoS":    2,
+    "Probe":  2,
+    "R2L":    2,
+    "U2R":    1,
 }
 ALERT_WINDOW = 60
 
@@ -318,7 +334,7 @@ class _TriggerListener(threading.Thread):
                 self._controller.data_updated.emit(nc, ac)
             return
 
-        threshold = ALERT_COUNTS.get(attack_type, 3)
+        threshold = DEMO_TRIGGER_THRESHOLD.get(attack_type, 2)
 
         self._pred_times[attack_type][src_ip].append(now)
         window = self._pred_times[attack_type][src_ip]
@@ -397,26 +413,15 @@ def process_packet(pkt, controller=None):
         _pred_history[src_ip] = [(t, p, c) for t, p, c in _pred_history[src_ip] if t > cutoff]
         recent = _pred_history[src_ip]
 
-    if count % 20 == 0:
-        print(f"[{ts}] #{count:>5} | {prediction.upper():8s} | "
-              f"proto={proto} port={port} | src={src_ip} "
-              f"pkts={len(recent)} conf={confidence:.2f}")
-
     is_sustained_attack = False
     if prediction != "normal" and confidence >= ML_CONFIDENCE_HIGH:
         attack_preds = [p for t, p, c in recent if p == prediction and c >= ML_CONFIDENCE_THRESHOLD]
-        if len(attack_preds) >= 15:
+        if len(attack_preds) >= ALERT_COUNTS.get(prediction, 3):
             is_sustained_attack = True
-
-    if not is_sustained_attack:
-        info = (f"<span style='color:#29ABE2;font-weight:bold;'>Normal</span>"
-                f" | {proto} | {src_ip} | port {port}")
-    else:
-        info = (f"<span style='color:#e63946;font-weight:bold;'>ALERT: {prediction}</span>"
-                f" | {proto} | {src_ip} | port {port} | conf={confidence:.2f}")
 
     if controller:
         if is_sustained_attack and _cooldown_ok(src_ip, prediction, now):
+            info = f"ALERT: {prediction} attack detected | Source: {src_ip} | Port: {port}"
             print(f"[{ts}] ALERT FIRED: {prediction} (conf={confidence:.2f}) from {src_ip}")
             service_map = {
                 80:"http", 443:"https", 53:"domain", 21:"ftp",
@@ -431,8 +436,11 @@ def process_packet(pkt, controller=None):
             controller.alert_triggered.emit(prediction, _get_preventions(prediction))
             controller.live_detection.emit(prediction, proto, payload_len, payload_len, service)
             controller.trigger_prevention(prediction, src_ip)
+        elif count % 10 == 0:
+            normal_msg = f"Normal traffic detected | {proto.upper()} | Source: {src_ip} | Port: {port}"
+            controller.status_updated.emit(normal_msg)
 
-    return info
+    return "Normal" if not is_sustained_attack else f"ALERT: {prediction}"
 
 
 def reset_state():

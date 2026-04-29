@@ -3,11 +3,20 @@
 # MODEL mode: offline ML prediction only, no packets sent
 # Run as Administrator. Start IDPS monitoring first.
 
+import os
+os.environ['SKLEARN_SILENCE_MLJ_UNPICKLING_WARNING'] = '1'
+
 import time
 import random
 import socket
 import json
+import warnings
+warnings.filterwarnings('ignore')
+
 import joblib
+from joblib import parallel_backend
+joblib.parallel_backend('threading', n_jobs=2)
+
 import numpy as np
 import pandas as pd
 from datetime import datetime
